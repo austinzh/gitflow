@@ -299,6 +299,15 @@ gerrit_push() {
 	}
 }
 
+cmd_check() {
+	echo "Checking gerrit access data"
+	[ "$(gerrit_check)" == "0" ] && die "Cannot locate gerrit connection information"
+	local test_request=$(gerrit_query "is:open")
+	local own=$(echo "$test_request" | gitflow-JSON.sh | grep -c '\[[0-9+]\]')
+	echo "You currently own $own open reviews"	
+}
+
+
 cmd_start() {
 	DEFINE_boolean fetch false 'fetch from origin before performing local operation' F
 	parse_args "$@"
