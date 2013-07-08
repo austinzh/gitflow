@@ -36,8 +36,6 @@
 # policies, either expressed or implied, of Vincent Driessen.
 #
 
-init
-
 init() {
 require_git_repo
 require_gitflow_initialized
@@ -54,6 +52,8 @@ PROJECT=$(git_current_branch | sed -n "s,^${PREFIX}\\([^/]*\\)/.*,\\1,p")
 [ "$PROJECT" ] && PREFIX=${PREFIX}${PROJECT}/
 [ "$PROJECT" ] && DEVELOP_BRANCH=${NS}${PROJECT_PREFIX}/${PROJECT}
 }
+init
+
 
 cmd_test() {
 	echo "NS = $NS"
@@ -235,11 +235,33 @@ parse_remote_name() {
 	NAME=$2
 	BRANCH=$PREFIX$NAME
 }
-
-gerrit_host() {
+gerrit_check(){
+	local val1=$(gerrit_url)
+	local val2=$(gerrit_user)
+	local val3=$(gerrit_pwd)
+	local val4=`curl -0 -3 -L -u $(gerrit_user):$(gerrit_pwd) -s --ssl-allow-beast "$(gerrit_url)/a/changes/?q=is:open" -w "%{http_code}" -o /dev/null`
+	[ "$val4" != "200" ] && fail "Cannot connect to gerrit. Status: $val4"
+	[ "$val4" == "500" ] && fail "Please check username and password"
+	[ -z "$val1" -o -z "$val2" -o -z "$val3" -o "$val4" != "200" ] && echo 0
+	[ -z "$val1" -o -z "$val2" -o -z "$val3" -o "$val4" != "200" ] || echo 1
+}
+gerrit_url() {
 	local val
-	val=$(git config --get "remote.$ORIGIN.url" | sed 's,^ssh://\([^:]*\):\([^/]*\)/.*$,\1,')
-	[[ -z "$val" ]] && fail "Couldn't get gerrit host from config: remote.$ORIGIN.url"
+	val=$(git config --get "gerrit.baseurl" | sed 's,^\(https?://[^:]*/.*[^/]\)$,\1,')
+	[[ -z "$val" ]] && fail "Please set gerrit.baseurl in git config. Format: https://host/gerrit"
+	echo $val
+}
+gerrit_user() {
+	local val
+	val=$(git config --get "gerrit.user")
+	[[ -z "$val" ]] && fail "Please set gerrit.user in git config"
+	echo $val
+}
+gerrit_pwd() {
+	local val
+	val=$(git config --get "gerrit.pwd")
+	#[[ -z "$val" ]] && echo "Please enter password (or set in config gerrit.pwd):"  && stty -echo && read val && stty echo
+	[[ -z "$val" ]] && echo "Please set gerrit.pwd"
 	echo $val
 }
 gerrit_port() {
@@ -249,16 +271,24 @@ gerrit_port() {
 	echo $val
 }
 gerrit_query() {
-	ssh -p $(gerrit_port) $(gerrit_host) "gerrit query $1"
+	local subst=$(echo "$1" | sed 's/ /+/g')
+	local res=`curl -0 -3 -L -u $(gerrit_user):$(gerrit_pwd) -s --ssl-allow-beast "$(gerrit_url)/a/changes/?q=$subst&format=JSON&o=LABELS&o=CURRENT_REVISION&o=ALL_REVISIONS" -b cookie -c cookie | tail -n +2 | sed 's/\r?\n//g'`
+	echo $res
 }
 gerrit_query_filter() {
 	local res=$(cat)
-	rows=$(echo "$res" | awk '/^rowCount:/ {print $2}')
+	rows=$(echo "$res" | gitflow-JSON.sh | grep -c '\[[0-9+]\]')
 	[ "$rows" == "1" ] || return 1
 	local filter=$1
-	value=$(echo "$res" | sed -n "s/^\\s*$filter: //p")
+	value=$(echo "$res" | gitflow-JSON.sh | sed -n "s/^\[0,\"$filter\"]\t//p" | sed 's/"//g')
 	[ "$value" ] || return 1
 	echo "$value"
+}
+gerrit_query_filter_open() {
+	local res=$(cat)
+	status=$(echo "$res" | gerrit_query_filter status)
+	result=[ "$status" == "NEW" -o "$status" == "SUBMITTED" ]
+	echo "$result"
 }
 gerrit_push() {
 	local err
@@ -469,15 +499,17 @@ helper_finish_cleanup() {
 
 
 cmd_fromreview() {
+	[ "$(gerrit_check)" == "0" ] && die "Cannot locate gerrit connection information"
 	info=$(gerrit_query "commit:$(git rev-parse HEAD)") \
 		|| fail "Couldn't contact Gerrit"
+	echo $info;
 	if [ "$(echo "$info" | gerrit_query_filter rowCount)" != "1" ]; then
 		warn ""
 		warn "Couldn't find the Gerrit review for commit $(git rev-parse HEAD)."
 		warn "Usage: First check out a patchset from Gerrit, then run 'git flow feature fromreview <name>'."
 		fail "Couln't find change."
 	fi
-	[ "$(echo "$info" | gerrit_query_filter open)" == "true" ] \
+	[ "$(echo "$info" | gerrit_query_filter_open)" == "1" ] \
 		|| fail "The Gerrit review is closed."
 	
 	DEVELOP_BRANCH=$(echo "$info" | gerrit_query_filter branch) \
@@ -740,8 +772,8 @@ git_change_id() {
 	echo "$change_id"
 }
 
-git_derived_change_id() {
-	local change_id=$(git_change_id "$2") || return 1
+git_manipulate_change_id() {
+	local change_id=$2
 	local tr=
 	case "$1" in
 		review)  tr=1032547698badcfe ;; # xor 11..
@@ -749,6 +781,11 @@ git_derived_change_id() {
 		*)       fail "derived_change_id: wrong type" ;;
 	esac
 	echo "$change_id" | tr "0123456789abcdef" "$tr"
+}
+
+git_derived_change_id() {
+	local change_id=$(git_change_id "$2") || return 1
+	echo $(git_manipulate_change_id $1 "$change_id")
 }
 
 replace_change_id() {
@@ -888,13 +925,15 @@ cmd_info() {
 	parse_args "$@"
 	expand_nameprefix_arg_or_current
 	require_feature_branch "$BRANCH"
-
+	
+	[ "$(gerrit_check)" == "0" ] && die "Cannot locate gerrit connection information"
+	
 	local first_feature_commit=$(git_get_first_feature_branch_commit "$BRANCH")
 	[ "$first_feature_commit" ] || die "Aborting: $BRANCH contains no commits on top of $DEVELOP_BRANCH."
 
 	# The Gerrit Change-Id for the whole feature is _derived_ from the first commit
 	local feature_change_id=$(git_derived_change_id review "$first_feature_commit")
-
+	
 	info=$(gerrit_query "$feature_change_id") \
 		|| fail "Couldn't contact Gerrit to get the change url"
 	echo "change $feature_change_id"
@@ -904,6 +943,9 @@ cmd_info() {
 
 cmd_submit() {
 	parse_args "$@"
+	
+	[ "$(gerrit_check)" == "0" ] && die "Cannot locate gerrit connection information"
+	
 	expand_nameprefix_arg_or_current
 	require_feature_branch "$BRANCH"
 	require_clean_working_tree
@@ -969,21 +1011,23 @@ cmd_submit() {
 
 	# Print Summary of actions
 	change_info=$(gerrit_query "commit:${detached_head}")
-	change_url=$(echo "$change_info" | gerrit_query_filter url)
+	change_number=$(echo "$change_info" | gerrit_query_filter _number)
 	change_id=$(echo "$change_info" | gerrit_query_filter id)
+	base_url=$(gerrit_url)
 	echo
 	echo "Summary of actions:"
 	echo "- All commits on you feature branch were squashed into one,"
 	echo "  and the resulting commit was pushed to Gerrit for review:"
 	echo "      Commit:     $(git log -1 --no-color --pretty="format:(%h..) %s" "${detached_head}")"
 	echo "      Change-Id:  ${change_id}"
-	echo "      Review:     ${change_url}"
+	echo "      Review:     ${base_url}/${change_number}"
 	echo
 }
 
 
 cmd_review() {
 	parse_args "$@"
+	[ "$(gerrit_check)" == "0" ] && die "Cannot locate gerrit connection information"
 	expand_nameprefix_arg_or_current
 	require_feature_branch "$BRANCH"
 	commit_head=$(git rev-parse HEAD)	
@@ -1023,9 +1067,10 @@ cmd_review() {
 
 	# Display link to change
 	change_info=$(gerrit_query "commit:${commit_head}")
-	change_url=$(echo "$change_info" | gerrit_query_filter url)
+	change_url=$(echo "$change_info" | gerrit_query_filter _number)
+	base_url=$(gerrit_url)
 	git log -1 --no-color --pretty="format:Commit: %Cgreen%h%Creset %s" "${commit_head}"
-	echo "        ${change_url}"
+	echo "        ${base_url}/${change_url}"
 	echo
 }
 
