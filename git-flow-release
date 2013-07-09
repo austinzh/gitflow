@@ -50,6 +50,7 @@ usage() {
 	echo "       git flow release finish [-FsumpkS] <version>"
 	echo "       git flow release publish <name>"
 	echo "       git flow release track <name>"
+	echo "       git flow release submit <name>"
 }
 
 cmd_default() {
@@ -362,4 +363,91 @@ cmd_track() {
 	echo "- A new remote tracking branch '$BRANCH' was created"
 	echo "- You are now on branch '$BRANCH'"
 	echo
+}
+
+
+get_tracked_branch() {
+	[ "$(git config "branch.$BRANCH.remote")" == "$ORIGIN" ] || return 1
+	local remote_branch=$(git config "branch.$BRANCH.merge" | sed -n 's,^refs/heads/,,p')
+	[ "$remote_branch" ] || return 1
+	has "$ORIGIN/$remote_branch" $(git_remote_branches) || return 1
+	echo "$remote_branch"
+}
+
+has_tracked_branch() {
+	get_tracked_branch >/dev/null
+}
+git_symbolic_head() {
+	local HEAD=$(git symbolic-ref HEAD 2>/dev/null | sed -n 's,refs/heads/,,p')
+	[ "$HEAD" ] || HEAD=$(git rev-parse HEAD)
+	echo "$HEAD"
+}
+
+cmd_submit() {
+	parse_args "$@"
+	
+	[ "$(gerrit_check)" == "0" ] && die "Cannot locate gerrit connection information"
+	
+	require_version_arg
+
+	# sanity checks
+	require_clean_working_tree
+	require_branch "$ORIGIN/$BRANCH"
+	
+	# Ensure we return to the HEAD we were called from after this command completes (or fails)
+	HEAD=$(git_symbolic_head)
+	trap "git checkout -q $HEAD" INT TERM EXIT
+	
+	git checkout -q "$BRANCH"
+	
+	warn $(has_tracked_branch)
+
+	# If we are tracking a remote branch, require that they are equal
+	if has_tracked_branch; then
+		warn "$ORIGIN $BRANCH $ORIGIN/$BRANCH"
+		git fetch -q "$ORIGIN" "refs/heads/$BRANCH:refs/remotes/$ORIGIN/$BRANCH"
+		git_compare_branches "$BRANCH" "remotes/$ORIGIN/$BRANCH"
+		if [[ $? -ne 0 && $? -ne 2 ]]; then
+			warn "The $ORIGIN/$BRANCH has changes that are not in the local branch."
+			warn "You should probably pull to get these changes before submitting."
+			ask Y "Abort now?" && die "Ok."
+		fi
+	fi
+	
+	
+	# Edit message
+	# edit_feature_commit_message || exit 1
+
+	#Move to detached head mode so our squash commit doesn't go on any branch
+	# git checkout -q `git rev-parse "$BRANCH"` || fail "Failed to checkout detached head"
+
+	#Reset to the last merge point with develop branch, but keeping the differences staged
+	# git reset --soft `git merge-base "remotes/$ORIGIN/$BRANCH" "$BRANCH"` || fail "Failed to create change commit"
+
+	# git_is_clean_working_tree && fail "Feature branch contains no changes compared to '$ORIGIN/$DEVELOP_BRANCH'"
+
+	#Commit squashed changes
+	# get_feature_commit_message | git commit --quiet --cleanup=strip --file=-
+	# detached_head=$(git rev-parse HEAD)
+
+	# git checkout -q "$BRANCH"
+	
+	# push commit for gerrit
+	#gerrit_push "$detached_head:refs/for/release"
+	
+	# Print Summary of actions
+	# change_info=$(gerrit_query "commit:${detached_head}")
+	# change_number=$(echo "$change_info" | gerrit_query_filter _number)
+	# change_id=$(echo "$change_info" | gerrit_query_filter id)
+	# base_url=$(gerrit_url)
+	# echo
+	# echo "Summary of actions:"
+	# echo "- Your last commit,"
+	# echo "  and the resulting commit was pushed to Gerrit for review:"
+	# echo "      Commit:     $(git log -1 --no-color --pretty="format:(%h..) %s" "${detached_head}")"
+	# echo "      Change-Id:  ${change_id}"
+	# echo "      Review:     ${base_url}/${change_number}"
+	# echo
+	
+	echo FINISHED
 }

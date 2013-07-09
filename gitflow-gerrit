@@ -1,0 +1,60 @@
+#!/bin/sh
+#
+# git-flow extension to bundle common gerrit functions
+#
+password=""
+
+gerrit_check(){
+	local val1=$(gerrit_url)
+	local val2=$(gerrit_user)
+	local val3=$(gerrit_pwd)
+	local val4=`curl -0 -3 -L -u $(gerrit_user):$(gerrit_pwd) -s --ssl-allow-beast "$(gerrit_url)/a/changes/?q=is:open" -w "%{http_code}" -o /dev/null`
+	[ "$val4" != "200" ] && die "Cannot connect to gerrit. Status: $val4"
+	[ "$val4" == "500" ] && die "Please check username and password"
+	[ -z "$val1" -o -z "$val2" -o -z "$val3" -o "$val4" != "200" ] && echo 0
+	[ -z "$val1" -o -z "$val2" -o -z "$val3" -o "$val4" != "200" ] || echo 1
+}
+
+gerrit_url() {
+	local val
+	val=$(git config --get "gerrit.baseurl" | sed 's,^\(https?://[^:]*/.*[^/]\)$,\1,')
+	[[ -z "$val" ]] && die "Please set gerrit.baseurl in git config. Format: https://host/gerrit"
+	echo $val
+}
+
+gerrit_user() {
+	local val
+	val=$(git config --get "gerrit.user")
+	[[ -z "$val" ]] && die "Please set gerrit.user in git config"
+	echo $val
+}
+
+gerrit_pwd() {
+	val=$(git config --get "gerrit.pwd")
+	#[[ -z "$val" ]] && ( warn "Please enter password (or set in config gerrit.pwd):"; read -s val )
+	[[ -z "$val" ]] && die "Please set gerrit.pwd"
+	echo $val
+}
+
+gerrit_query() {
+	local subst=$(echo "$1" | sed 's/ /+/g')
+	local res=`curl -0 -3 -L -u $(gerrit_user):$(gerrit_pwd) -s --ssl-allow-beast "$(gerrit_url)/a/changes/?q=$subst&format=JSON&o=LABELS&o=CURRENT_REVISION&o=ALL_REVISIONS" -b cookie -c cookie | tail -n +2 | sed 's/\r?\n//g'`
+	echo $res
+}
+
+gerrit_query_filter() {
+	local res=$(cat)
+	rows=$(echo "$res" | gitflow-JSON.sh | grep -c '\[[0-9+]\]')
+	[ "$rows" == "1" ] || return 1
+	local filter=$1
+	value=$(echo "$res" | gitflow-JSON.sh | sed -n "s/^\[0,\"$filter\"]\t//p" | sed 's/"//g')
+	[ "$value" ] || return 1
+	echo "$value"
+}
+
+gerrit_query_filter_open() {
+	local res=$(cat)
+	status=$(echo "$res" | gerrit_query_filter status)
+	result=[ "$status" == "NEW" -o "$status" == "SUBMITTED" ]
+	echo "$result"
+}
