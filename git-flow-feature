@@ -65,14 +65,19 @@ cmd_test() {
 usage() {
 	echo "usage: git flow feature [list] [-v]"
 	echo "       git flow feature start [-F] <name> [<base>]"
-	echo "       git flow feature finish [-rFkDS] [<name|nameprefix>]"
 	echo "       git flow feature delete [<name|nameprefix>]"
 	echo "       git flow feature publish <name>"
+	echo "       git flow feature submit <name>"
+	echo "       git flow feature fromreview <name>"
 	echo "       git flow feature track <name>"
 	echo "       git flow feature diff [<name|nameprefix>]"
-	echo "       git flow feature rebase [-i] [<name|nameprefix>]"
 	echo "       git flow feature checkout [<name|nameprefix>]"
+	echo "       git flow feature check"
 	echo "       git flow feature pull [-r] <remote> [<name>]"
+	echo "       git flow feature rebase [-i] [<name|nameprefix>]"
+	echo "       git flow feature finish [-rFkDS] [<name|nameprefix>]"
+	echo " "
+	echo "Type 'git flow feature help <command>' for further information"
 }
 
 init_restore_branch() {
@@ -146,7 +151,53 @@ cmd_list() {
 }
 
 cmd_help() {
-	usage
+	echo " "
+	case "$1" in
+		list) 
+			echo "git flow feature [list] [-v]"
+			echo "   List all the features you have local"
+		   ;;
+		start) 
+			echo "git flow feature start [-F] <name> <base>"
+			echo "   Start a new feature branch with <name>."
+			echo "   Branch is created from <base>."
+			echo "   If -F is given git will fetch current version from remote."
+		   ;;
+		delete) 
+			echo "git flow feature delete <name|prefix>"
+			echo "   Delete feature branch(es) with <name> or prefix."
+		   ;;
+		publish) 
+			echo "git flow feature publish <name>"
+			echo "   Push feature branch <name> to remote."
+			echo "   Allows others to participate using track <name>."
+		   ;;
+		submit) 
+			echo "git flow feature submit <name>"
+			echo "   Push the feature branch <name> as single commit to gerrit for review"
+		   ;;
+		fromreview) 
+			echo "git flow feature fromreview <name>"
+			echo "   Create a feature branch with name <name> from an ongoing review"
+		   ;;
+		track) 
+			echo "git flow feature track <name>"
+			echo "   Pulls a remote existing feature branch so you can participate"
+		   ;;
+		diff) 
+			echo "git flow feature diff <name>"
+			echo "   Shows the diff for the feature branch <name>"
+		   ;;
+		check) 
+			echo "git flow feature check"
+			echo "   Checks your gerrit access data"
+		   ;;
+		*) 	echo "currently no future information is available for the selected command"
+			echo "this means maybe you should not use it"
+			echo " "
+			usage ;;
+	esac
+	echo " "
 	exit 0
 }
 
